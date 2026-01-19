@@ -1,6 +1,6 @@
 # NPC AI Work
 
-Prototypes for implementations of different methods of Enemy AI coded in C++ for Unreal Engine 5.
+Prototypes and implementations of different methods of Enemy AI coded in C++ for Unreal Engine 5.
 
 These are personal projects that are done to either test my understanding or as a way to learn new methods.
 

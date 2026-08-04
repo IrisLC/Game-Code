@@ -1,4 +1,5 @@
-#Game Design Class
+# Game Design Class
+C++
 
 This is code created for a class I took at Miami University (CSE 389 Game Design and Implementation).
 

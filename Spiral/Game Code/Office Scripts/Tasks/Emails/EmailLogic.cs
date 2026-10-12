@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using UnityEngine;
 
 public class EmailLogic : ATask
 {
@@ -24,7 +23,8 @@ public class EmailLogic : ATask
     /// <summary>
     /// A list of all the WordDropBoxes for the email
     /// </summary>
-    public List<WordDropBox> AllBoxes;
+    public List<EmailWordDropBox> AllBoxes;
+    List<EmailWordDropBox> incorrectBoxes = new();
 
     /// <summary>
     /// The number of incorrectly placed DraggableWords when submitting the task
@@ -54,14 +54,39 @@ public class EmailLogic : ATask
 
     protected override bool EvaluateTask()
     {
-        int count = 0;
         // See how many words are correct
-        foreach (WordDropBox box in AllBoxes)
+        foreach (EmailWordDropBox box in AllBoxes)
         {
-            if (box.CheckWord()) count++;
+            if (!box.CheckWord())
+            {
+                incorrectBoxes.Add(box);
+            }
         }
-        NumIncorrectAnswers = AllBoxes.Count - count;
+        NumIncorrectAnswers = incorrectBoxes.Count;
         return NumIncorrectAnswers == 0;
     }
 
+    public override string GetResponse()
+    {
+        string responseBody = "";
+
+        foreach (EmailWordDropBox box in incorrectBoxes)
+        {
+            if (box.hasBlock)
+            {
+                responseBody += CorrectionEmail.EmailCorrection1 + box.Word.Word
+                + CorrectionEmail.EmailCorrection2 + EmailDraggableWord.GetCorrectWord(box.RequiredWordType) + "\".\n";
+            }
+            else
+            {
+                responseBody += CorrectionEmail.EmailCorrectionBlank1 +
+                    EmailDraggableWord.GetCorrectWord(box.RequiredWordType) +
+                    CorrectionEmail.EmailCorrectionBlank2 + ".\n";
+            }
+
+
+        }
+
+        return responseBody;
+    }
 }

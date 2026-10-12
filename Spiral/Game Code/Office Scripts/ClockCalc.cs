@@ -15,11 +15,11 @@ public class ClockCalc : MonoBehaviour
     /// <summary>
     /// The hour the day starts at
     /// </summary>
-    const int startHour = 9;
+    public const int startHour = 9;
     /// <summary>
     /// The hour (in millitary time) the day ends at
     /// </summary>
-    const int endHour = 17;
+    public const int endHour = 17;
     /// <summary>
     /// How many minutes are progressed each step
     /// </summary>
@@ -28,11 +28,11 @@ public class ClockCalc : MonoBehaviour
     /// <summary>
     /// How many minutes in game pass from the start to the end of the day
     /// </summary>
-    int totalGameMinutes => (endHour - startHour) * 60;
+    const int totalGameMinutes = (endHour - startHour) * 60;
     /// <summary>
     /// The total number of steps the clock will go through
     /// </summary>
-    int totalSteps => totalGameMinutes / minutesPerStep;
+    const int totalSteps = totalGameMinutes / minutesPerStep;
 
     int currentStep;
 
@@ -81,12 +81,12 @@ public class ClockCalc : MonoBehaviour
 
             if (TimeLeftInDay == null)
             {
-                if (WarnedOnce) Debug.LogWarning("No CountdownTimer Found, ClockCalc will not update");
+                if (!WarnedOnce) Debug.LogWarning("No CountdownTimer Found, ClockCalc will not update");
                 WarnedOnce = true;
                 return;
             }
 
-
+            InitialTime = TimeLeftInDay.InitialTime;
             InvalidTimer = false;
         }
 
@@ -95,28 +95,60 @@ public class ClockCalc : MonoBehaviour
 
         if (!TimeLeftInDay.isRunning) return;
 
-        // Get the current step of the clock
-        float currentTime = TimeLeftInDay.Time;
-
-        float normalizedTime = Mathf.InverseLerp(InitialTime, 0f, currentTime);
-        int newStep = Mathf.Min(Mathf.FloorToInt(normalizedTime * totalSteps), totalSteps);
-
-        // If we are at a new step
-        if (currentStep != newStep)
-        {
-            UpdateClockUI(newStep);
-        }
-
+        UpdateClockUI();
     }
 
     /// <summary>
     /// Updates the visible clock to the player based on the step the clock should be on 
     /// </summary>
     /// <param name="step">the current clock step</param>
-    void UpdateClockUI(int step)
+    void UpdateClockUI()
     {
-        currentStep = step;
 
+        clockText.text = DisplayCurrentTime(ShouldHaveSuffix);
+
+    }
+
+    void UpdateClockUI(int time)
+    {
+        if (TimeLeftInDay != null)
+        {
+            clockText.text = DisplayTimeAtGivenTime(time, ShouldHaveSuffix);
+        }
+        else
+        {
+            clockText.text = DisplayTimeAtGivenTime(time, ShouldHaveSuffix);
+        }
+
+    }
+
+    public static string DisplayCurrentTime(bool ShouldHaveSuffix = false)
+    {
+
+        float currentTime = OfficeManager.TimeLeftInDay.Time;
+        // Get time between 0 and 1
+        float normalizedTime = Mathf.InverseLerp(OfficeManager.TimeLeftInDay.InitialTime, 0f, currentTime);
+        int newStep = Mathf.Min(Mathf.FloorToInt(normalizedTime * totalSteps), totalSteps);
+
+        return CalculateTime(newStep, ShouldHaveSuffix);
+    }
+
+    public static string DisplayTimeAtGivenTime(int hours, int minutes, bool ShouldHaveSuffix = false)
+    {
+        return DisplayTimeAtGivenTime(TimeToMinutes(hours, minutes), ShouldHaveSuffix);
+    }
+
+    public static string DisplayTimeAtGivenTime(int minutes, bool ShouldHaveSuffix = false)
+    {
+        // get minutes since day start
+        minutes -= startHour * 60;
+        int step = minutes / minutesPerStep;
+
+        return CalculateTime(step, ShouldHaveSuffix);
+    }
+
+    static string CalculateTime(int step, bool ShouldHaveSuffix)
+    {
         int currentMinutes = (startHour * 60) + (step * minutesPerStep);
 
         int hour = currentMinutes / 60;
@@ -128,7 +160,20 @@ public class ClockCalc : MonoBehaviour
         if (displayHour == 0) displayHour = 12;
 
         //Displays time with a variance based on ShouldHaveSuffix
-        clockText.text = ShouldHaveSuffix ? $"{displayHour}:{minute:00} {TimeSuffix}" : $"{displayHour}:{minute:00}";
+        return ShouldHaveSuffix ? $"{displayHour}:{minute:00} {TimeSuffix}" : $"{displayHour}:{minute:00}";
+    }
 
+    public static int GetCurrentMinutes()
+    {
+        float currentTime = OfficeManager.TimeLeftInDay.Time;
+        // Get time between 0 and 1
+        float normalizedTime = Mathf.InverseLerp(OfficeManager.TimeLeftInDay.InitialTime, 0f, currentTime);
+        int step = Mathf.Min(Mathf.FloorToInt(normalizedTime * totalSteps), totalSteps);
+        return (startHour * 60) + (step * minutesPerStep);
+    }
+
+    public static int TimeToMinutes(int Hour, int Minute)
+    {
+        return (Hour * 60) + Minute;
     }
 }

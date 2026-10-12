@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using Unity.VisualScripting;
@@ -18,7 +19,12 @@ public class TaskManager
     /// <summary>
     /// The tasks that have yet to be given to the player that day
     /// </summary>
-    internal List<TaskPrefab> UnassignedTasks = new List<TaskPrefab>();
+    internal List<TaskBlock> UnassignedTasks = new();
+    internal List<TaskBlock> AssignedBlocks = new();
+
+    HashSet<string> CompletedTasks = new();
+
+    List<string> PrintTasks = new();
     /// <summary>
     /// The buttons on the TODO list that will take the player to the task
     /// </summary>
@@ -28,13 +34,10 @@ public class TaskManager
     /// </summary>
     static List<GameObject> Emails = new List<GameObject>();
     /// <summary>
-    /// The list holding all currently active print tasks
-    /// </summary>
-    static List<GameObject> Prints = new List<GameObject>();
-    /// <summary>
     /// The list holding all currently active incident report tasks
     /// </summary>
     static List<GameObject> IRs = new List<GameObject>();
+    static List<GameObject> Weathers = new List<GameObject>();
     /// <summary>
     /// The number of activeTasks the player has left
     /// </summary>
@@ -46,7 +49,7 @@ public class TaskManager
     /// <summary>
     /// The total number of tasks the player needs to finish today
     /// </summary>
-    public int TotalTasksForDay;
+    public int TotalTasksForDay { get => GetUnassignedTasksNum() + ActiveTasks.Count + PrintTasks.Count + finishedTasks; }
     /// <summary>
     /// The oldest added task, for use with the Dev. Tools
     /// </summary>
@@ -57,9 +60,12 @@ public class TaskManager
     /// </summary>
     public float TimeForNextTask;
 
+    public CorrectionEmail correctionEmail = null;
+
     // Subscribe to events
     public TaskManager()
     {
+
         // Create the tasks
         OfficeManager.OnDayStart += DaySetup;
         // The lists will be repopulated when we resume the day so we clear the lists to prevent duplicates
@@ -74,6 +80,10 @@ public class TaskManager
         OfficeManager.OnDayStart -= DaySetup;
         OfficeManager.OnDayPaused -= ClearLists;
         OfficeManager.OnDayResume -= RecreateTasks;
+
+        Emails.Clear();
+        IRs.Clear();
+        Weathers.Clear();
     }
 
     /// <summary>
@@ -81,11 +91,13 @@ public class TaskManager
     /// </summary>
     void DaySetup()
     {
+        finishedTasks = 0;
         CreateTasks(OfficeRefs.dailyModifiers.GetTasks());
 
         //For if there are unfinished tasks from previous days
         if (ActiveTasks.Count != 0)
         {
+            ClearLists();
             RecreateTasks();
         }
 
@@ -97,17 +109,18 @@ public class TaskManager
     /// Takes a List of task GameObjects and creates TaskPrefabs around them, adding said TaskPrefabs to UnassignedTasks.
     /// </summary>
     /// <param name="Tasks">The list of Prefabs to create tasks from.</param>
-    internal void CreateTasks(List<GameObject> Tasks)
+    internal void CreateTasks(List<TaskBlock> Tasks)
     {
-        foreach (GameObject Prefab in Tasks)
+        foreach (TaskBlock block in Tasks)
         {
-            ATask task = Prefab.GetComponentInChildren<ATask>();
-            Assert.IsNotNull(task, $"GameObject {Prefab.name} must have an ATask component.");
+            block.Init();
 
-            UnassignedTasks.Add(new TaskPrefab(Prefab, task));
+            if (block.Tasks.Count != 0)
+            {
+                UnassignedTasks.Add(block);
+            }
         }
 
-        TotalTasksForDay = UnassignedTasks.Count + ActiveTasks.Count;
     }
 
     /// <summary>
@@ -116,14 +129,16 @@ public class TaskManager
     /// </summary>
     public void RecreateTasks()
     {
-        if (ActiveTasks.Count == 0) return;
+        if (AssignedBlocks.Count == 0) return;
+        int count = AssignedBlocks.Count;
 
         // Loop around ActiveTasks, recreating each one, until we've completed a single loop
-        for (int i = 0; i < ActiveTasks.Count; ++i)
+        for (int i = 0; i < count; ++i)
         {
-            AddTask(ActiveTasks[0]);
+            AddTaskByBlock(null, AssignedBlocks[0]);
+
             // Task will be put back at the end
-            ActiveTasks.Remove(ActiveTasks[0]);
+            AssignedBlocks.Remove(AssignedBlocks[0]);
         }
     }
 
@@ -133,22 +148,44 @@ public class TaskManager
     /// Moves the task from UnassignedTasks, to ActiveTasks.
     /// </summary>
     /// <param name="task">A TaskPrefab to make the task around, if none provided will use the first value in UnassignedTasks</param>
-    internal void AddTask(TaskPrefab task = null)
+    internal void AddTaskByBlock(TaskPrefab task = null, TaskBlock block = null)
     {
-        if (task == null)
+        if (task == null && block == null)
         {
             // If no tasks in UnassignedTasks then don't move forward
             if (UnassignedTasks.Count <= 0) return;
 
             // Get the first unassigned task
-            task = UnassignedTasks[0];
-            UnassignedTasks.Remove(task);
+            block = UnassignedTasks[0];
+            UnassignedTasks.Remove(block);
+            AssignedBlocks.Add(block);
         }
+        else if (task != null)
+        {
+            block = FindBlock(task);
+        }
+
+        foreach (TaskPrefab taskInBlock in block.Tasks)
+        {
+            AddTask(taskInBlock);
+        }
+
+        GameObject toDoBLock = MonoBehaviour.Instantiate(Resources.Load("toDoBlock") as GameObject, OfficeRefs.TodoList.transform);
+        toDoBLock.GetComponent<TaskBlockProcessor>().Init(block);
+        foreach (string name in CompletedTasks)
+        {
+            toDoBLock.GetComponent<TaskBlockProcessor>().CrossOffTask(name);
+        }
+    }
+    internal void AddTask(TaskPrefab task)
+    {
 
         if (task.TaskUIObject.IsDestroyed())
         {
             task.InstantiateTaskUIObject();
         }
+
+        if (CompletedTasks.Contains(task.Task.TaskName)) return;
 
         ActiveTasks.Add(task);
 
@@ -165,7 +202,12 @@ public class TaskManager
 
 
         //Create the Button in the todoList
-        CreateButton(task, OfficeRefs.ButtonPrefab, OfficeRefs.TodoList);
+        CreateButton(task, OfficeRefs.ButtonPrefab, GetButtonHolder(task.Task.Type));
+
+        if (task.Task.Type == ATask.TaskType.IncidentReport)
+        {
+            PrintTasks.Add(task.Task.TaskName);
+        }
 
         task.TaskUIObject.SetActive(false);
     }
@@ -181,7 +223,7 @@ public class TaskManager
         if (buttonPrefab == null) return;
         // Create the button as a child of the buttonHolder and add it to the button list
         GameObject button = UnityEngine.Object.Instantiate(buttonPrefab, buttonHolder.transform, false);
-        Buttons.Add(button);
+        //Buttons.Add(button);
 
         // Get the TaskListButton component on the button object and assign the task to it
         TaskListButton buttonScript = button.GetComponent<TaskListButton>();
@@ -190,6 +232,7 @@ public class TaskManager
 
         // Add the name of the task to the text of the button
         button.GetComponentInChildren<TextMeshProUGUI>().text = task.Task.TaskName;
+        task.TaskUIObject.GetComponent<ATask>().SetButton(button);
     }
 
     /// <summary>
@@ -197,36 +240,50 @@ public class TaskManager
     /// </summary>
     /// <param name="task">The task that was completed.</param>
     /// <param name="Correct">Whether or not the task was completed correctly.</param>
-    /// <param name="Weight">The weight of the task, determines how much success or failiure impacts AnxietyLevels</param>
+    /// <param name="Weight">The weight of the task, determines how much success or failiure impacts StressLevels</param>
     public void CompletedTask(ATask task, bool Correct, int Weight)
     {
         // Play the Incorrect animation if the player failed the task
         if (!Correct)
         {
-            OfficeRefs.Computer.ExitComputer();
             OfficeRefs.ScreenFlash.SetTrigger("ScreenFlash");
+        }
+
+        if (task.Type == ATask.TaskType.Print)
+        {
+            PrintTasks.Remove(task.name);
+            ++finishedTasks;
+            return;
         }
 
         // Removes the TaskPrefab from ActiveTasks
         TaskPrefab prefab = TaskPrefab.GetTaskInList(ActiveTasks, task);
         ActiveTasks.Remove(prefab);
 
-        // Destroy the Button in the to-do list
-        foreach (GameObject Button in Buttons)
-        {
-            if (Button.GetComponent<TaskListButton>().RelevantTask.Task.TaskName.Equals(prefab.Task.TaskName))
-            {
-                UnityEngine.Object.Destroy(Button);
-                Buttons.Remove(Button);
-                break;
-            }
-        }
+        CompletedTasks.Add(task.TaskName);
 
         // Remove the button from the List holding it, and destroy the gameObject
         GetTaskTypeList(prefab.Task.Type).Remove(prefab.TaskUIObject);
-        UnityEngine.Object.Destroy(prefab.TaskUIObject);
+        if (correctionEmail != null)
+        {
+            OfficeManager.GetOfficeManager().StartCoroutine(DelayDestroy(prefab));
+        }
+        else
+        {
+            UnityEngine.Object.Destroy(prefab.TaskUIObject);
+        }
 
         ++finishedTasks;
+    }
+
+    /// <summary>
+    /// Delays the destruction of a taskprefab by one frame to ensure a CorrectionEmail is still able to access its data
+    /// </summary>
+    IEnumerator DelayDestroy(TaskPrefab prefab)
+    {
+
+        yield return null;
+        UnityEngine.Object.Destroy(prefab.TaskUIObject);
     }
 
     //// <summary>
@@ -246,7 +303,7 @@ public class TaskManager
         // Add the next task if it is the right time.
         if (timeLeftInDay.Time < TimeForNextTask)
         {
-            AddTask();
+            AddTaskByBlock();
 
             TimeForNextTask = timeLeftInDay.Time - timeBetweenTasks;
         }
@@ -261,8 +318,9 @@ public class TaskManager
     {
         Emails.Clear();
         IRs.Clear();
-        Prints.Clear();
         Buttons.Clear();
+        PrintTasks.Clear();
+        Weathers.Clear();
     }
 
     /// <summary>
@@ -279,10 +337,8 @@ public class TaskManager
 
             case ATask.TaskType.IncidentReport:
                 return IRs;
-
-            case ATask.TaskType.Print:
-                return Prints;
-
+            case ATask.TaskType.Weather:
+                return Weathers;
             default:
                 Debug.LogError("Unexpected Type Given, Null Type List Returned");
                 return null;
@@ -299,11 +355,61 @@ public class TaskManager
             case ATask.TaskType.IncidentReport:
                 return OfficeRefs.IRHolder.transform;
 
-            case ATask.TaskType.Print:
-                return OfficeRefs.PrinterHolder.transform;
+            case ATask.TaskType.Weather:
+                return OfficeRefs.WeatherHolder.transform;
 
             default:
                 return null;
         }
     }
+
+    public static GameObject GetButtonHolder(ATask.TaskType type)
+    {
+        switch (type)
+        {
+            case ATask.TaskType.Email:
+                return OfficeRefs.OutgoingEmailButtonHolder;
+
+            case ATask.TaskType.IncidentReport:
+                return OfficeRefs.IncidentReportButtonHolder;
+
+            case ATask.TaskType.Weather:
+                return OfficeRefs.WeatherButtonHolder;
+
+            default:
+                return null;
+        }
+    }
+
+    int GetUnassignedTasksNum()
+    {
+        int count = 0;
+        foreach (TaskBlock block in UnassignedTasks)
+        {
+            count += block.Tasks.Count;
+        }
+        return count;
+    }
+
+    TaskBlock FindBlock(TaskPrefab taskPrefab)
+    {
+        foreach (TaskBlock block in UnassignedTasks)
+        {
+            if (block.Tasks.Contains(taskPrefab))
+            {
+                return block;
+            }
+        }
+
+        foreach (TaskBlock block in AssignedBlocks)
+        {
+            if (block.Tasks.Contains(taskPrefab))
+            {
+                return block;
+            }
+        }
+
+        return null;
+    }
+
 }

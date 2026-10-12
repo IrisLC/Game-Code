@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -8,11 +9,12 @@ public class OfficeCamera : MonoBehaviour
 {
 
     InputAction InteractAction;
-    Camera mCamera;
+    public Camera mCamera { get; private set; }
 
     public enum CameraDirection { Left, Middle, Right }
     CameraDirection currDirection = CameraDirection.Middle;
-    bool onComputer = false; // if player is on the computer turn true
+    bool ZoomComputer = false; // if player is on the computer turn true
+    bool ComputerOn { get => Referencer.OfficeReferences.Computer.IsComputerOn; }
     /// <summary>
     /// Whether the player was hovering over an IClickable gameObject in the office
     /// </summary>
@@ -22,6 +24,36 @@ public class OfficeCamera : MonoBehaviour
     /// </summary>
     bool IsHoveringComputer;
 
+    [Header("Coworker rotation data")]
+    /// <summary>
+    /// How much slower the passive camera rotation should be as compared to the normal pan speed. (divides CameraRotationSpeed by this)
+    /// </summary>
+    [SerializeField] float coworkerPassiveCameraSpeedModifier = 3;
+    /// <summary>
+    /// How many seconds it should take for the camera to snap to the coworker when they spawn in
+    /// </summary>
+    [SerializeField] float initialCoworkerSpawnCameraRotationTime = 1;
+    /// <summary>
+    /// The coworker currently in the scene
+    /// </summary>
+    GameObject coworker;
+    /// <summary>
+    /// The rotation of the camera at the point the coworker is spawned
+    /// </summary>
+    Quaternion initialLookDirectionAtCoworkerSpawn;
+    /// <summary>
+    /// The rotation the player should have at the end of the coworker spawn snap
+    /// </summary>
+    Quaternion coworkerRotationSnapTarget;
+    /// <summary>
+    /// The Time.time at the moment the coworker is spawned
+    /// </summary>
+    float spawnTime;
+    /// <summary>
+    /// True iff we should be actively rotating to the coworker at the moment they spawn
+    /// </summary>
+    bool isRotatingToCoworker;
+
     /// <summary>
     /// The speed at which the camera can rotate on the Y axis
     /// </summary>
@@ -30,6 +62,7 @@ public class OfficeCamera : MonoBehaviour
     /// The rotational limits of the camera on the Y axis, min and max.
     /// </summary>
     [SerializeField] Vector2 CameraBounds;
+    [SerializeField] Vector2 ZoomComputerBounds;
 
     /// <summary>
     /// The spot at which a picked up piece of paper will be held
@@ -66,10 +99,21 @@ public class OfficeCamera : MonoBehaviour
     /// </summary>
     GraphicRaycaster UIRaycaster;
 
+    [SerializeField] float zoomSpeed = .5f;
+
+    internal static bool isDebugging;
+    const float OfficeFOV = 60f;
+    const float ComputerFOV = 25f;
+    Coroutine coroutine;
+
+    [SerializeField] private AudioSource clickAudioSource;
+    [SerializeField] private AudioClip computerClickSound;
+    [SerializeField, Range(0f, 1f)] private float clickVolume = 1f;
+
 
     void Awake()
     {
-        mCamera = Camera.main;
+        mCamera = gameObject.GetComponent<Camera>();
         eventSystem = EventSystem.current;
     }
 
@@ -82,31 +126,49 @@ public class OfficeCamera : MonoBehaviour
 
     void OnEnable()
     {
-        if (InteractAction == null) InteractAction = GameManager.OfficeInputs.Interact;
+        if (InteractAction == null)
+        {
+            if (!GameManager.PlayerInputInitialized) GameManager.SetupInputs();
+            InteractAction = GameManager.OfficeInputs.Interact;
+        }
         InteractAction.performed += Interact;
+        InteractAction.Enable();
 
-        ComputerScript.ComputerTurnedOff += CloseComputer;
+        ComputerScript.ComputerTurnedOff += UnZoomComputer;
+
+        Coworker.CoworkerSpawn += OnCoworkerSpawned;
+
+        Cursor.visible = true;
+        Cursor.lockState = CursorLockMode.Confined;
     }
 
     void OnDisable()
     {
         InteractAction.performed -= Interact;
 
-        ComputerScript.ComputerTurnedOff -= CloseComputer;
+        ComputerScript.ComputerTurnedOff -= UnZoomComputer;
+
+        Coworker.CoworkerSpawn -= OnCoworkerSpawned;
     }
 
     // Update is called once per frame
     void Update()
     {
-        if (!onComputer) // only move camera if player is not on computer
+        if (!isRotatingToCoworker)
         {
             PanCamera();
+            if (ZoomComputer) // only move camera if player is not on computer
+            {
+                CheckHoverComputer();
+            }
+
             CheckHoverOffice();
         }
         else
         {
-            CheckHoverComputer();
+            LookAtCoworker();
         }
+
     }
 
     /// <summary>
@@ -116,8 +178,31 @@ public class OfficeCamera : MonoBehaviour
     /// <param name="context"></param>
     void Interact(InputAction.CallbackContext context)
     {
+
         Vector2 mousePos = Mouse.current.position.ReadValue();
         Ray ray = mCamera.ScreenPointToRay(mousePos);
+
+        if (isDebugging)
+        {
+            PointerEventData ptr = new(eventSystem);
+            ptr.position = Mouse.current.position.ReadValue();
+            List<RaycastResult> results = new();
+            UIRaycaster.Raycast(ptr, results);
+            if (results.Count > 0)
+            {
+                Debug.Log("Hit object " + results[0].gameObject + " belonging to " + results[0].gameObject.transform.parent.gameObject);
+            }
+        }
+
+        if (ZoomComputer) {
+            if (clickAudioSource != null && computerClickSound != null)
+            {
+                clickAudioSource.PlayOneShot(computerClickSound, clickVolume);
+            }
+
+            return;
+        }
+        ;
 
         if (Physics.Raycast(ray, out RaycastHit rayHit))
         {
@@ -125,7 +210,7 @@ public class OfficeCamera : MonoBehaviour
             switch (rayHit.collider.gameObject.tag)
             {
                 case "Computer":
-                    if (!onComputer) OpenComputer();
+                    OpenComputer();
                     break;
 
                 case "Paper":
@@ -134,6 +219,12 @@ public class OfficeCamera : MonoBehaviour
 
                 case "PaperBin":
                     rayHit.collider.gameObject.GetComponent<Bins>().Use();
+                    break;
+                default:
+                    if (rayHit.collider.gameObject.TryGetComponent<Interactable>(out Interactable interactable))
+                    {
+                        interactable.Use();
+                    }
                     break;
             }
 
@@ -205,13 +296,17 @@ public class OfficeCamera : MonoBehaviour
     /// </summary>
     void OpenComputer()
     {
-        onComputer = true;
-        helperText.SetActive(false);
-
-        foreach (GameObject go in Referencer.OfficeReferences.DisappearOnComputerOpen)
+        if (!ZoomComputer && coroutine != null)
         {
-            go.SetActive(false);
+            StopCoroutine(coroutine);
         }
+        ZoomComputer = true;
+
+        coroutine = StartCoroutine(ChangeFOV(mCamera.fieldOfView, ComputerFOV));
+
+        if (ComputerOn) return;
+
+        helperText.SetActive(false);
 
         Referencer.OfficeReferences.Computer.OpenComputer();
 
@@ -220,13 +315,14 @@ public class OfficeCamera : MonoBehaviour
     /// <summary>
     /// Turns on any objects set to turn off when the computer opens
     /// </summary>
-    void CloseComputer()
+    void UnZoomComputer()
     {
-        onComputer = false;
-        foreach (GameObject go in Referencer.OfficeReferences.DisappearOnComputerOpen)
+        if (ZoomComputer && coroutine != null)
         {
-            go.SetActive(true);
+            StopCoroutine(coroutine);
         }
+        ZoomComputer = false;
+        coroutine = StartCoroutine(ChangeFOV(mCamera.fieldOfView, OfficeFOV));
     }
 
     /// <summary>
@@ -245,14 +341,23 @@ public class OfficeCamera : MonoBehaviour
                 rotationModifier = CameraRotationSpeed * Time.deltaTime;
                 break;
             case CameraDirection.Middle:
+                // if there is a coworker active then do the subtle pan
+                if (Referencer.OfficeReferences.coworkerManager.isCoworkerActive)
+                {
+                    rotationModifier = -CameraRotationSpeed / coworkerPassiveCameraSpeedModifier * Time.deltaTime;
+                    break;
+                }
                 return;
         }
 
         float newRotation = mCamera.transform.rotation.eulerAngles.y + rotationModifier;
         // This gets around the way that Euler angles are converted too and from Quaternions 
         if (newRotation > 180) newRotation -= 360;
-        //Debug.Log(newRotation);
 
+        if (ZoomComputer && (newRotation < ZoomComputerBounds.x || newRotation > ZoomComputerBounds.y))
+        {
+            UnZoomComputer();
+        }
         // Don't excede the given rotation limits
         newRotation = Mathf.Clamp(newRotation, CameraBounds.x, CameraBounds.y);
 
@@ -302,5 +407,51 @@ public class OfficeCamera : MonoBehaviour
             paper.transform.localPosition = Vector3.zero;
             paper.transform.localRotation = Quaternion.Euler(Vector3.zero);
         }
+    }
+
+    /// <summary>
+    /// Method called when a coworker is added, sets the necessary variables for auto panning
+    /// </summary>
+    /// <param name="worker">the gameObject for the coworker that was just spawned</param>
+    void OnCoworkerSpawned(GameObject worker)
+    {
+        coworker = worker;
+        isRotatingToCoworker = true;
+
+        initialLookDirectionAtCoworkerSpawn = mCamera.transform.rotation;
+        coworkerRotationSnapTarget = Quaternion.LookRotation(coworker.transform.position.With(y: mCamera.transform.position.y)
+            - mCamera.transform.position, mCamera.transform.up);
+        spawnTime = Time.time;
+
+    }
+
+    /// <summary>
+    /// Method handling the snapping of the camera to a newly spawned coworker
+    /// </summary>
+    void LookAtCoworker()
+    {
+        // Percentage through the rotation
+        float t = (Time.time - spawnTime) / initialCoworkerSpawnCameraRotationTime;
+
+        mCamera.transform.rotation = Quaternion.Slerp(initialLookDirectionAtCoworkerSpawn, coworkerRotationSnapTarget, t);
+
+        // if we've completed the rotation then stop the snap
+        if (t >= 1)
+        {
+            isRotatingToCoworker = false;
+        }
+    }
+
+    IEnumerator ChangeFOV(float start, float end)
+    {
+        float time = 0;
+
+        while (mCamera.fieldOfView != end)
+        {
+            mCamera.fieldOfView = Mathf.Lerp(start, end, time);
+            yield return null;
+            time = Mathf.Clamp(time + Time.deltaTime / zoomSpeed, 0, 1);
+        }
+        coroutine = null;
     }
 }

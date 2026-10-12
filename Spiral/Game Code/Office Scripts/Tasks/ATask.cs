@@ -1,9 +1,8 @@
 using UnityEngine;
-using UnityEngine.Assertions;
 
 public abstract class ATask : MonoBehaviour
 {
-
+    public GameObject button;
     /// <summary>
     /// The delegate for when a Task is finished, be it right or wrong
     /// </summary>
@@ -23,19 +22,21 @@ public abstract class ATask : MonoBehaviour
     /// <summary>
     /// The possible kinds of tasks
     /// </summary>
-    public enum TaskType { Null, Email, IncidentReport, Print }
+    public enum TaskType { Null = 0, Email = 1, Print = 2, IncidentReport = 3, Weather = 4, PTO = 5 }
 
     /// <summary>
     /// The type of task that this task is
     /// </summary>
     public virtual TaskType Type { get => TaskType.Null; }
 
+    public virtual int Weight { get => 3; }
+
     /// <summary>
     /// Method called when the task is done and ready for evaluation
     /// </summary>
     public virtual void Submit()
     {
-        EvaluateTask();
+        FireEvent(this, EvaluateTask(), Weight);
     }
 
     /// <summary>
@@ -56,4 +57,16 @@ public abstract class ATask : MonoBehaviour
     /// <param name="Weight">The importance of the task, 
     ///     allows for not all tasks to be treated the same value wise.</param>
     protected static void FireEvent(ATask task, bool Correct, int Weight) => OnTaskFinish.Invoke(task, Correct, Weight);
+
+    public abstract string GetResponse();
+
+    public void SetButton(GameObject button)
+    {
+        this.button = button;
+    }
+
+    protected virtual void OnDestroy()
+    {
+        Destroy(button);
+    }
 }

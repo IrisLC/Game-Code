@@ -1,15 +1,15 @@
 using System.Collections.Generic;
 using TMPro;
-using UnityEditor;
 using UnityEngine;
+using UnityEngine.Assertions;
 
 public class IncidentReportTaskFactory
 {
+    static TaskFactoryTemplates template = Resources.Load<TaskFactoryTemplates>("IncidentReportTemplate");
     /// <summary>
     /// The GameObject that will serve as the framework around which the email will be constructed
     /// </summary>
-    GameObject IRTemplate = AssetDatabase.LoadAssetAtPath<GameObject>
-        ("Assets/Prefabs/UI/Tasks/Templates/IncidentReportTemplate.prefab");
+    GameObject IRTemplate;
 
     /// <summary>
     /// The parent GameObject for all the others, assigned as the Instantiated EmailTemplate
@@ -49,13 +49,16 @@ public class IncidentReportTaskFactory
 
     List<int> censoredWordIndexes;
 
-    public GameObject Create(IncidentReportSO IRSO)
+    public GameObject Create(IncidentReportSO IRSO, GameObject prefab)
     {
+        Assert.IsNotNull(template);
+        IRTemplate = prefab;
+
         ir = IRSO;
 
         censoredWordIndexes = new List<int>();
 
-        Container = GameObject.Instantiate(IRTemplate);
+        Container = prefab;
         logic = Container.GetComponent<blackoutText>();
         ContainerRect = Container.GetComponent<RectTransform>();
 

@@ -5,6 +5,7 @@ using TMPro;
 using UnityEngine;
 using System.Text.RegularExpressions;
 using UnityEngine.InputSystem;
+using System.Linq;
 
 public class blackoutText : ATask
 {
@@ -45,7 +46,7 @@ public class blackoutText : ATask
     /// <summary>
     /// The minimum PercentageCorrect that will result in the task being successful
     /// </summary>
-    [SerializeField] private float SuccessPercentage;
+    [SerializeField] private float SuccessPercentage = 80;
 
     /// <summary>
     /// The percentage of correctly blacked out words.
@@ -55,6 +56,8 @@ public class blackoutText : ATask
     /// How much censored words that were not expected to be correct impacts the percentageCorrect
     /// </summary>
     [SerializeField] float extraCountModifier = .5f;
+    List<int> unnecessaryIndexes = new();
+    List<int> missedIndexes = new();
 
     /// <summary>
     /// The possible states of highlight modification when a clicked mouse is dragged over a highlightable word.
@@ -149,7 +152,7 @@ public class blackoutText : ATask
     /// <param name="clickPosition">the position of the mouse</param>
     private void TryToggleClickedWord(Vector2 clickPosition)
     {
-        int wordIndex = TMP_TextUtilities.FindIntersectingWord(TargetText, clickPosition, null);
+        int wordIndex = TMP_TextUtilities.FindIntersectingWord(TargetText, clickPosition, Camera.main);
 
         if (wordIndex == -1) return;
         // If we've found a word, move to toggling the word
@@ -227,7 +230,7 @@ public class blackoutText : ATask
         // Get the halves of the text as strings, and recombine them with the constructed modified word
         string FirstHalf = TargetText.text.Substring(0, firstHalfEnd);
         string SecondHalf = TargetText.text.Substring(secondHalfStart);
-        TargetText.text = FirstHalf + sb.ToString() + SecondHalf;
+        TargetText.SetText(FirstHalf + sb.ToString() + SecondHalf);
 
         // Forces TargetText to reparse the text to include the mark tags
         TargetText.ForceMeshUpdate(false, true);
@@ -238,6 +241,8 @@ public class blackoutText : ATask
         GetMatchPercentage();
 
         FireEvent(this, EvaluateTask(), 3);
+
+        SubmittedIRQueue.AddIncidentReport(TaskName, TargetText.text.Replace($"<mark={blackoutColorHex}>", "<mark=#000000FF>"), EvaluateTask());
     }
 
     /// <summary>
@@ -261,6 +266,7 @@ public class blackoutText : ATask
             else
             {
                 ++extraCount;
+                unnecessaryIndexes.Add(index);
             }
         }
 
@@ -383,7 +389,11 @@ public class blackoutText : ATask
             }
             else
             {
-                wordInfo.firstCharacterIndex = textInfo.wordInfo[wordIndex + direction].firstCharacterIndex;
+                if (wordIndex != 0)
+                {
+                    wordInfo.firstCharacterIndex = textInfo.wordInfo[wordIndex + direction].firstCharacterIndex;
+                }
+
             }
 
             wordInfo.characterCount += textInfo.wordInfo[wordIndex + direction].characterCount + 1;
@@ -450,8 +460,53 @@ public class blackoutText : ATask
     public void ClearBlackouts()
     {
         blackedOutWordIndexes.Clear();
-        TargetText.text = originalText;
+        TargetText.SetText(originalText);
     }
+
+    public override string GetResponse()
+    {
+        missedIndexes = ExpectedWordIndexes.Except(blackedOutWordIndexes).ToList();
+
+        string Output = "";
+
+        if (missedIndexes.Count > 0)
+        {
+            Output += CorrectionEmail.IncidentReportCorrection1 +
+                    ResponseBlock(missedIndexes) + "\n\\\n\\\n\t";
+        }
+
+        if (unnecessaryIndexes.Count > 0)
+        {
+            Output += CorrectionEmail.IncidentReportCorrection2 +
+                    ResponseBlock(unnecessaryIndexes) + "\n\\";
+        }
+
+        return Output;
+    }
+
+    string ResponseBlock(List<int> indexes)
+    {
+        string Output = "";
+
+        string entry = "";
+        for (int i = 0; i < indexes.Count; ++i)
+        {
+            int index = indexes[i];
+
+            entry += TargetText.textInfo.wordInfo[index].GetWord() + " ";
+
+            // this enables that if we are dealing with a series of words right next to one another, 
+            //   they are output as a single line.
+            if (i != indexes.Count - 1 && index + 1 != indexes[i + 1])
+            {
+                Output += entry + '\n';
+                entry = "";
+            }
+        }
+
+        return Output;
+    }
+
 }
 
 

@@ -1,7 +1,9 @@
 using UnityEngine;
+using UnityEngine.Assertions;
 
 public class Printer : MonoBehaviour
 {
+    static Printer instance;
     /// <summary>
     /// The spot where paper should be created
     /// </summary>
@@ -9,22 +11,19 @@ public class Printer : MonoBehaviour
     /// <summary>
     /// The paper being created
     /// </summary>
-    [SerializeField] GameObject Paper;
+    [SerializeField] GameObject PaperObject;
     /// <summary>
     /// A distance offset so multiple papers are not created in the same position
     /// </summary>
     public static float PrintOffset;
+    public static float PrintOffsetDelta { get; private set; } = 0.05f;
+    static RenderTexture renderTexture;
 
-    void OnEnable()
+    void Awake()
     {
-        // subscribe to print event that passes a sorting spot and a texture
-        ComputerScript.PrintPage += Print;
-    }
-
-    void OnDisable()
-    {
-        // unsubscribe from print event
-        ComputerScript.PrintPage -= Print;
+        instance = this;
+        renderTexture = Resources.Load<RenderTexture>("RenderTextures/PaperPrint");
+        Assert.IsNotNull(renderTexture);
     }
 
     /// <summary>
@@ -32,16 +31,34 @@ public class Printer : MonoBehaviour
     /// </summary>
     /// <param name="spot">the SortingSpot the printed paper should go in</param>
     /// <param name="PaperCover">the texture of the paper</param>
-    void Print(Paper.SortingSpot spot, Texture PaperCover)
+    public void Print()
     {
+        if (SubmittedIRQueue.IsEmpty) return;
+
+        bool WasCorrect = SubmittedIRQueue.CurrentCompletion;
+
+        Paper.SortingSpot spot;
+        if (WasCorrect)
+        {
+            spot = Paper.SortingSpot.Correct;
+        }
+        else
+        {
+            spot = Paper.SortingSpot.Incorrect;
+        }
+
         // Create paper and increase offset
-        GameObject CreatedPaper = Instantiate(Paper, PrintPoint.position.Add(y: PrintOffset), PrintPoint.rotation);
-        PrintOffset += 0.05f;
+        GameObject CreatedPaper = Instantiate(instance.PaperObject, instance.PrintPoint, false);
+        CreatedPaper.transform.position = instance.PrintPoint.position.Add(y: PrintOffset);
+        PrintOffset += PrintOffsetDelta;
 
         // Set variables
         Paper PaperScript = CreatedPaper.GetComponent<Paper>();
 
         PaperScript.AssignSpot(spot);
-        PaperScript.AssignTexture(PaperCover);
+        PaperScript.AssignTexture(renderTexture);
+        PaperScript.AssignName(SubmittedIRQueue.CurrentName);
+
+        SubmittedIRQueue.RemoveIncidentReport();
     }
 }

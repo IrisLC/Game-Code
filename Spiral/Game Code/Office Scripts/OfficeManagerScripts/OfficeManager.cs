@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -15,16 +16,18 @@ public class OfficeManager : MonoBehaviour
 
 
     public TaskManager TaskManager { get => taskManager; }
-    [SerializeReference] TaskManager taskManager;
-    public AnxietyManager AnxietyManager { get => anxietyManager; }
-    [SerializeReference] AnxietyManager anxietyManager;
+    [SerializeReference] public TaskManager taskManager;
+    public StressManager StressManager { get => stressManager; }
+    [SerializeReference] StressManager stressManager;
 
     /// <summary>
     /// If the office level is the level being actively played
     /// </summary>
-    bool IsOfficePlaying;
+    public static bool IsOfficePlaying { get; private set; }
 
     [SerializeField] float DialRotationSpeed = 1f;
+
+    public static List<IncomingEmailData> ReceivedEmails = new();
 
     [Header("Time")]
     /// <summary>
@@ -36,6 +39,17 @@ public class OfficeManager : MonoBehaviour
     /// Starts at max and goes down to 0, at which point the day ends.
     /// </summary>
     public static CountdownTimer TimeLeftInDay;
+
+    /// <summary>
+    /// The set of values that, when percentageDone hits those values, a notify event will be fired.
+    ///     Only includes those that have not been hit yet.
+    /// </summary>
+    static SortedSet<float> percentNotifiesList = new();
+    public delegate void PercentNotifyType(float percent);
+    /// <summary>
+    /// The event fired when percentageDone hits a requested value, also sends the value that was requested.
+    /// </summary>
+    public static event PercentNotifyType PercentNotify;
 
     /*Day Phase Events*/
 
@@ -63,6 +77,8 @@ public class OfficeManager : MonoBehaviour
     /// </summary>
     public static event Action OnDayEnd;
 
+    public static bool BlockSpiralEnter;
+    public static bool SpiralWasBlocked;
 
     void Awake()
     {
@@ -78,13 +94,22 @@ public class OfficeManager : MonoBehaviour
         // Assign this as the OfficeManager that all other scripts will reference
         OfficeRefs.officeManager = this;
 
-        taskManager = new TaskManager();
-        anxietyManager = new AnxietyManager(this, DialRotationSpeed);
+        if (taskManager == null)
+        {
+            taskManager = new TaskManager();
+        }
+        if (stressManager == null)
+        {
+            stressManager = new StressManager(this, DialRotationSpeed);
+        }
+
+        ReceivedEmails = new();
     }
 
     void OnEnable()
     {
         ATask.OnTaskFinish += OnTaskComplete;
+        IncomingEmailSender.EmailSent += OnReceiveEmail;
         // Ensures we aren't assigning an event call before we create the timer
         if (TimeLeftInDay != null)
         {
@@ -104,7 +129,10 @@ public class OfficeManager : MonoBehaviour
             TimeLeftInDay.OnTimerStop += EndDay;
         }
 
-        StartDay();
+        if (!IsOfficePlaying)
+        {
+            StartDay();
+        }
     }
 
     void Update()
@@ -122,15 +150,15 @@ public class OfficeManager : MonoBehaviour
             EndDay();
         }
 
-        if (anxietyManager.isAnxietyMaxed) AnxietyMaxed();
+        if (StressManager.isStressMaxed) StressMaxed();
     }
 
     void FixedUpdate()
     {
         if (IsOfficePlaying)
         {
-            // Passive anxiety gain
-            anxietyManager.PassiveAnxietyUpdate(TimeLeftInDay.Speed);
+            // Passive stress gain
+            stressManager.PassiveStressUpdate(TimeLeftInDay.Speed);
         }
     }
 
@@ -139,12 +167,18 @@ public class OfficeManager : MonoBehaviour
     {
         TimeLeftInDay.OnTimerStop -= EndDay;
         ATask.OnTaskFinish -= OnTaskComplete;
+        IncomingEmailSender.EmailSent -= OnReceiveEmail;
     }
 
     void OnDestroy()
     {
+        if (Instance != this) return;
         // Allows a new singleton to be made
-        if (Instance == this) Instance = null;
+        Instance = null;
+
+        ReceivedEmails.Clear();
+        TimeLeftInDay = null;
+        percentNotifiesList.Clear();
     }
 
     /* Enter and leave office scene methods */
@@ -154,12 +188,20 @@ public class OfficeManager : MonoBehaviour
     /// </summary>
     public void StartDay()
     {
+        IsOfficePlaying = true;
+
         if (TimeLeftInDay != null)
         {
             TimeLeftInDay.Reset(OfficeRefs.dailyModifiers.GetLengthOfDay());
         }
+        else
+        {
+            TimeLeftInDay = new CountdownTimer(OfficeRefs.dailyModifiers.GetLengthOfDay());
+            TimeLeftInDay.OnTimerStop += EndDay;
+        }
 
         OnDayStart?.Invoke();
+
 
 
         // Set up the tutorial if we are in the first level
@@ -172,8 +214,6 @@ public class OfficeManager : MonoBehaviour
 
         // Begin the timer
         TimeLeftInDay.Start();
-
-        IsOfficePlaying = true;
     }
 
     /// <summary>
@@ -181,6 +221,8 @@ public class OfficeManager : MonoBehaviour
     /// </summary>
     void PauseDay()
     {
+        IsOfficePlaying = false;
+
         OnDayPaused?.Invoke();
 
         // Close the computer and pause the time
@@ -190,14 +232,14 @@ public class OfficeManager : MonoBehaviour
         // Start the blur animation
         OfficeRefs.Blur.SetTrigger("Blur");
 
-        IsOfficePlaying = false;
     }
 
     /// <summary>
-    /// Returns to office following Anxiety Maze sections
+    /// Returns to office following Anxiety Scene sections
     /// </summary>
     public void ResumeDay()
     {
+        IsOfficePlaying = true;
         // Fire the events
         OnDayResume?.Invoke();
         OnDayResumeWithCompleted?.Invoke(gameManager.SucceededMaze);
@@ -206,7 +248,6 @@ public class OfficeManager : MonoBehaviour
         TimeLeftInDay.Time -= OfficeRefs.dailyModifiers.GetTimeLost(gameManager.SucceededMaze);
         TimeLeftInDay.Resume();
 
-        IsOfficePlaying = true;
     }
 
     /// <summary>
@@ -214,12 +255,12 @@ public class OfficeManager : MonoBehaviour
     /// </summary>
     void EndDay()
     {
+        IsOfficePlaying = false;
         OnDayEnd?.Invoke();
 
         // Goes to the current Home Scene
         SceneManager.LoadScene(GameManager.CurrentHomeIndex);
 
-        IsOfficePlaying = false;
     }
 
     /* Helper Methods */
@@ -235,23 +276,34 @@ public class OfficeManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Series of calls for when the Anxiety level hits it's cap, transitions into Anxiety Scene
+    /// Series of calls for when the Stress level hits it's cap, transitions into Anxiety Scene
     /// </summary>
-    void AnxietyMaxed()
+    void StressMaxed()
     {
         if (!IsOfficePlaying) return;
+
+        EnterSpiral();
+    }
+
+    public void EnterSpiral()
+    {
+        if (BlockSpiralEnter)
+        {
+            SpiralWasBlocked = true;
+        }
+
         PauseDay();
 
-        gameManager.StartCoroutine(nameof(GameManager.EnterAnxietyAttack));
+        gameManager.StartCoroutine(nameof(GameManager.EnterSpiral));
     }
 
     /// <summary>
-    /// Passes along method call for when a task is complete and changes the anxiety level based on said completion
+    /// Passes along method call for when a task is complete and changes the stress level based on said completion
     /// </summary>
     void OnTaskComplete(ATask Task, bool Correct, int Weight)
     {
         taskManager.CompletedTask(Task, Correct, Weight);
-        anxietyManager.UpdateAnxiety(OfficeRefs.dailyModifiers.GetAnxietyModifierOnTaskCompletion(Correct) * Weight);
+        StressManager.UpdateStress(OfficeRefs.dailyModifiers.GetStressModifierOnTaskCompletion(Correct) * Weight);
     }
 
     /// <summary>
@@ -270,9 +322,39 @@ public class OfficeManager : MonoBehaviour
     {
         // Converts GetTimeAscending from 0-InitialTime to 0-100 and assigns 
         percentageDone = TimeLeftInDay.GetTimeAscending().Remap(0, TimeLeftInDay.InitialTime, 0, 100);
+        CheckPercentNotify();
     }
 
     public static OfficeManager GetOfficeManager() => Instance;
+
+    /// <summary>
+    /// Adds a new percentage that, when percentageDone exceeds the given value, will fire a PercentNotify event
+    /// </summary>
+    /// <param name="percentage">The desired percent to be notified at</param>
+    public static void AddPercentNotify(float percentage)
+    {
+        percentNotifiesList.Add(percentage);
+    }
+
+    /// <summary>
+    /// Checks to see if any requested percentage notify value has been hit in the past frame, 
+    ///     and if so fires a PercentNotify event
+    /// </summary>
+    static void CheckPercentNotify()
+    {
+        float percent = percentNotifiesList.Min;
+        if (Instance.percentageDone >= percent)
+        {
+            percentNotifiesList.Remove(percent);
+            PercentNotify.Invoke(percent);
+        }
+    }
+
+    void OnReceiveEmail(IncomingEmailData data, GameObject email)
+    {
+        ReceivedEmails.Add(data);
+    }
+
 
 #if UNITY_INCLUDE_TESTS
     // For Tests

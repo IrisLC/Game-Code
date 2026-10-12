@@ -58,6 +58,7 @@ public class TaskPrefab
     {
         TaskUIObject = MonoBehaviour.Instantiate(UIPrefabReference);
         TaskUIObject.SetActive(false);
+        Task = TaskUIObject.GetComponent<ATask>();
     }
 
     /// <summary>

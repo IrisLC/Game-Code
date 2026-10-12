@@ -13,29 +13,14 @@ public class TaskListButton : MonoBehaviour, IPointerClickHandler
     /// <summary>
     /// The computer script
     /// </summary>
-    ComputerScript Computer = Referencer.OfficeReferences.Computer;
+    protected ComputerScript Computer = Referencer.OfficeReferences.Computer;
 
     /// <summary>
     /// Opens the tab corresponding to the task's type and pulls up the task
     /// </summary>
     /// <param name="eventData"></param>
-    public void OnPointerClick(PointerEventData eventData)
+    public virtual void OnPointerClick(PointerEventData eventData)
     {
-        switch (RelevantTask.Task.Type)
-        {
-            case ATask.TaskType.Email:
-                Computer.OpenTab(ComputerScript.ComputerPage.Emails);
-                break;
-
-            case ATask.TaskType.IncidentReport:
-                Computer.OpenTab(ComputerScript.ComputerPage.Incidents);
-                break;
-
-            case ATask.TaskType.Print:
-                Computer.OpenTab(ComputerScript.ComputerPage.Printing);
-                break;
-        }
-
-        Computer.UpdateTask(RelevantTask.TaskUIObject, RelevantTask.Task.Type);
+        Computer.tasksWindow.ChangeItem(RelevantTask.TaskUIObject);
     }
 }

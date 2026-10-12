@@ -1,28 +1,22 @@
 using System;
 using System.Collections.Generic;
 using TMPro;
-using UnityEditor;
 using UnityEngine;
 using UnityEngine.Assertions;
+using UnityEngine.UI;
 
 //TODO: add logic so boxes can't go off the side of the screen
 public class EmailTaskFactory
 {
-    /// <summary>
-    /// The GameObject that will serve as the framework around which the email will be constructed
-    /// </summary>
-    GameObject EmailTemplate = AssetDatabase.LoadAssetAtPath<GameObject>
-        ("Assets/Prefabs/UI/Tasks/Templates/Email/EmailTemplate.prefab");
+    static TaskFactoryTemplates templates = Resources.Load<TaskFactoryTemplates>("EmailTemplate");
     /// <summary>
     /// The GameObject that will serve as the framework for all the boxes inserted throughout the email
     /// </summary>
-    GameObject WordDropBoxPrefab = AssetDatabase.LoadAssetAtPath<GameObject>
-        ("Assets/Prefabs/UI/Tasks/Templates/Email/EmailWordDropboxTemplate.prefab");
+    GameObject WordDropBoxPrefab;
     /// <summary>
     /// The GameObject that will serve as the framework for all the words in the word bank
     /// </summary>
-    GameObject DraggableWordPrefab = AssetDatabase.LoadAssetAtPath<GameObject>
-        ("Assets/Prefabs/UI/Tasks/Templates/Email/EmailDraggableWordTemplate.prefab");
+    GameObject DraggableWordPrefab;
 
     /// <summary>
     /// The parent GameObject for all the others, assigned as the Instantiated EmailTemplate
@@ -36,24 +30,12 @@ public class EmailTaskFactory
     /// The GameObject for the WordBank
     /// </summary>
     GameObject WordBank;
+    GameObject Scroll;
 
     /// <summary>
     /// The TextMeshPro component that will be the email's text 
     /// </summary>
     TextMeshProUGUI textMeshComponent;
-
-    /// <summary>
-    /// The index for the TextObject in the EmailTemplate
-    /// </summary>
-    const int TextObjectIndex = 0;
-    /// <summary>
-    /// The index for the WordBank in the EmailTemplate
-    /// </summary>
-    const int WordBankIndex = 1;
-    /// <summary>
-    /// The index for the directions in the EmailTemplate
-    /// </summary>
-    const int DirectionsIndex = 3;
 
     /// <summary>
     /// The string that marks where every WordDropBox prefab will go
@@ -68,7 +50,7 @@ public class EmailTaskFactory
     /// <summary>
     /// The list of all created WordDropBox components
     /// </summary>
-    List<WordDropBox> BoxInstances = new List<WordDropBox>();
+    List<EmailWordDropBox> BoxInstances = new List<EmailWordDropBox>();
     /// <summary>
     /// The ordered list of every EmailLogic.WordTypes enum for the WordDropBoxes ([0] is the first box, final entry is the last box)
     /// </summary>
@@ -77,7 +59,7 @@ public class EmailTaskFactory
     /// <summary>
     /// The width of the WordDropBox prefab, used for <space> tags in the text so that WordDropBoxes are not covering text
     /// </summary>
-    float boxWidth { get => WordDropBoxPrefab.transform.GetChild(TextObjectIndex).GetComponent<RectTransform>().rect.width; }
+    float boxWidth;
     /// <summary>
     /// The RectTransform of Container GameObject
     /// </summary>
@@ -114,14 +96,20 @@ public class EmailTaskFactory
     /// </summary>
     /// <param name="email">The ScriptableObject providing the data for the email</param>
     /// <returns>The created GameObject for the Task</returns>
-    public GameObject Create(EmailSO email)
+    public GameObject Create(EmailSO email, GameObject prefab)
     {
+        Assert.IsNotNull(templates);
+        WordDropBoxPrefab = templates.Templates[1];
+        DraggableWordPrefab = templates.Templates[2];
+
+        boxWidth = WordDropBoxPrefab.transform.GetChild(0).GetComponent<RectTransform>().rect.width;
+
         emailSO = email;
 
         Assert.IsTrue(emailSO.WordBankWords.Count != 0);
 
         //Create the EmailTemplate framework and get its components
-        Container = GameObject.Instantiate(EmailTemplate);
+        Container = prefab;
         logic = Container.GetComponent<EmailLogic>();
         ContainerRect = Container.GetComponent<RectTransform>();
 
@@ -130,7 +118,8 @@ public class EmailTaskFactory
         ContainerRect.ForceUpdateRectTransforms();
 
         // Get the text gameObject, and assign the Email's text
-        TextObject = Container.transform.GetChild(TextObjectIndex).gameObject;
+        Scroll = Container.transform.Find("EmailBackground/Scroll View").gameObject;
+        TextObject = Scroll.transform.Find("Viewport/Container/EmailBodyText").gameObject;
         textMeshComponent = TextObject.GetComponent<TextMeshProUGUI>();
         textMeshComponent.text = email.RawText;
 
@@ -141,6 +130,8 @@ public class EmailTaskFactory
         textMeshComponent.ForceMeshUpdate(true, true);
         BoxTagLength = textMeshComponent.GetPreferredValues(BoxTag).x;
         textMeshComponent.text = textMeshComponent.text.Replace(BoxTag, $"{BoxTag} <space={boxWidth - BoxTagLength:F3}>");
+        (textMeshComponent.transform as RectTransform).ForceUpdateRectTransforms();
+        LayoutRebuilder.ForceRebuildLayoutImmediate(Scroll.transform as RectTransform);
         textMeshComponent.ForceMeshUpdate(true, true);
 
         // Create the boxes
@@ -149,13 +140,15 @@ public class EmailTaskFactory
         // Remove the BoxTags
         textMeshComponent.text = textMeshComponent.text.Replace($"{BoxTag} <space={boxWidth - BoxTagLength:F3}>", $"<space={boxWidth:F3}>|");
 
+
         // Create the word bank
-        WordBank = Container.transform.GetChild(WordBankIndex).gameObject;
+        WordBank = Container.transform.Find("WordBank/Scroll View/Viewport/Content").gameObject;
         AddWordBank(email.WordBankWords);
 
         // Assign the text fields
         logic.TaskName = email.Name;
-        Container.transform.GetChild(DirectionsIndex).gameObject.GetComponent<TextMeshProUGUI>().text = email.Description;
+        Container.transform.Find("Direction").gameObject.GetComponent<TextMeshProUGUI>().SetText(email.Description);
+        Container.transform.Find("titleOfEmail").gameObject.GetComponent<TextMeshProUGUI>().SetText(email.Name);
 
         return Container;
     }
@@ -197,7 +190,7 @@ public class EmailTaskFactory
                 box.GetComponent<RectTransform>().anchoredPosition = Position;
 
                 // Gets the WordDropBox component of the newly made GameObject
-                WordDropBox wordDropBox = box.transform.GetChild(0).GetComponent<WordDropBox>();
+                EmailWordDropBox wordDropBox = box.transform.GetChild(0).GetComponent<EmailWordDropBox>();
 
                 // Values for Dynamic movement and resizing due to resizing of the screen
                 wordDropBox.TextContainer = textMeshComponent;
@@ -227,7 +220,7 @@ public class EmailTaskFactory
             // Create a new GameObject as a child of the WordBank
             GameObject dragWord = GameObject.Instantiate(DraggableWordPrefab, WordBank.transform, false);
 
-            DraggableWord draggableWord = dragWord.GetComponent<DraggableWord>();
+            EmailDraggableWord draggableWord = dragWord.GetComponent<EmailDraggableWord>();
 
             // Gets the corresponding DraggableWordInfo struct from the dictionary and assigns its values to the 
             // DraggableWord component in the newly created GameObject
@@ -236,10 +229,10 @@ public class EmailTaskFactory
             draggableWord.IsCorrect = info.IsCorrect;
 
             // Gives the DraggableWord a reference to TextMeshProUGUI component to allow for dynamic resizing
-            draggableWord.EmailText = textMeshComponent;
+            draggableWord.ParentText = textMeshComponent;
 
             // Gives the child text object the necessary text for the word
-            dragWord.transform.GetChild(TextObjectIndex).gameObject.GetComponent<TextMeshProUGUI>().text = text;
+            dragWord.transform.GetChild(0).gameObject.GetComponent<TextMeshProUGUI>().text = text;
         }
 
         //WordBank.GetComponent<RectTransform>().ForceUpdateRectTransforms();
